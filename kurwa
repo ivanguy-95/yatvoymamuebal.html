@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Змейка — мобильный экран</title>
+  <style>
+    :root{
+      --bg:#0b1220; --panel:#0f1724; --accent:#16a34a; --muted:#94a3b8; --danger:#ef4444;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial}
+    body{display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,#071025 0%, #081526 100%);color:#e6eef8}
+
+    /* Game container sized for mobile but responsive */
+    .wrap{width:min(780px,96vw);max-width:420px;background:linear-gradient(180deg,var(--panel),#071226);border-radius:16px;padding:14px;box-shadow:0 8px 30px rgba(3,6,23,.6);}
+
+    header{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-bottom:8px}
+    h1{font-size:16px;margin:0}
+    .score{font-weight:700;color:var(--accent);font-size:15px}
+    .meta{font-size:12px;color:var(--muted)}
+
+    /* Canvas area */
+    .stage{position:relative;background:#071229;border-radius:12px;padding:10px;display:grid;grid-template-columns:1fr}
+    canvas{width:100%;height:auto;display:block;border-radius:8px;background:linear-gradient(180deg,#02101a,#021822)}
+
+    /* Controls */
+    .controls{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:10px}
+    .pad{display:grid;grid-template-columns:repeat(3,56px);grid-template-rows:repeat(3,56px);gap:8px;align-items:center;justify-items:center}
+    .btn{width:56px;height:56px;border-radius:12px;background:rgba(255,255,255,0.03);display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--muted);user-select:none;touch-action:none}
+    .btn:active{transform:translateY(1px);}
+    .hidden{visibility:hidden}
+
+    /* Side panel with actions */
+    .actions{display:flex;gap:8px;align-items:center}
+    .action{padding:8px 12px;border-radius:10px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.03);color:var(--muted);font-size:13px}
+    .action.primary{background:linear-gradient(180deg,var(--accent),#04964a);color:#041014;font-weight:700;border:none}
+
+    /* Overlay (start / gameover) */
+    .overlay{position:absolute;inset:10px;background:linear-gradient(180deg,rgba(1,3,8,0.55),rgba(1,3,8,0.75));border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:16px;text-align:center}
+    .overlay h2{margin:0;font-size:18px}
+    .overlay p{margin:0;color:var(--muted);font-size:13px}
+    .small{font-size:12px;color:var(--muted)}
+
+    footer{display:flex;justify-content:center;margin-top:10px;color:var(--muted);font-size:12px}
+
+    @media (min-width:420px){.pad{grid-template-columns:repeat(3,64px);grid-template-rows:repeat(3,64px)}.btn{width:64px;height:64px;border-radius:14px}}
+  </style>
+</head>
+<body>
+  <div class="wrap" role="application">
+    <header>
+      <div>
+        <h1>Змейка (мобильный режим)</h1>
+        <div class="meta">Управление: свайп / кнопки / стрелки</div>
+      </div>
+      <div>
+        <div class="score">Очки: <span id="score">0</span></div>
+        <div class="meta">Рекорд: <span id="best">0</span></div>
+      </div>
+    </header>
+
+    <main class="stage">
+      <canvas id="game" width="360" height="360" aria-label="Игровое поле змейки"></canvas>
+
+      <div id="overlay" class="overlay">
+        <h2 id="overlay-title">Нажмите «Старт»</h2>
+        <p id="overlay-body">Съешьте яблоко, избегайте стен и собственного хвоста.</p>
+        <div style="display:flex;gap:8px;margin-top:6px">
+          <button id="startBtn" class="action primary">Старт</button>
+          <button id="resumeBtn" class="action">Продолжить</button>
+        </div>
+        <div class="small">Свайп по полю, чтобы менять направление.</div>
+      </div>
+    </main>
+
+    <div class="controls">
+      <div class="pad" id="pad">
+        <div class="btn hidden" data-dir="NW"></div>
+        <div class="btn" data-dir="N">↑</div>
+        <div class="btn hidden" data-dir="NE"></div>
+
+        <div class="btn" data-dir="W">←</div>
+        <div class="btn hidden"></div>
+        <div class="btn" data-dir="E">→</div>
+
+        <div class="btn hidden" data-dir="SW"></div>
+        <div class="btn" data-dir="S">↓</div>
+        <div class="btn hidden" data-dir="SE"></div>
+      </div>
+
+      <div class="actions">
+        <button id="pauseBtn" class="action">Пауза</button>
+        <button id="restartBtn" class="action">Рестарт</button>
+      </div>
+    </div>
+
+    <footer>Версия: простая — только HTML/CSS/JS • Работает оффлайн</footer>
+  </div>
+
+  <script>
+  /* Mobile-friendly Snake — single file
+     - grid-based canvas scaled to element size
+     - swipe controls + on-screen buttons + keyboard arrows
+     - localStorage best score
+  */
+
+  (function(){
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const bestEl = document.getElementById('best');
+    const overlay = document.getElementById('overlay');
+    const overlayTitle = document.getElementById('overlay-title');
+    const overlayBody = document.getElementById('overlay-body');
+    const startBtn = document.getElementById('startBtn');
+    const resumeBtn = document.getElementById('resumeBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const restartBtn = document.getElementById('restartBtn');
+
+    // Settings
+    let cols = 20; // grid columns (will scale)
+    let rows = 20; // grid rows
+    let cellSize = 16; // px will be recalculated
+    let speed = 8; // moves per second
+
+    // State
+    let snake = [{x:10,y:10}];
+    let dir = {x:1,y:0};
+    let nextDir = null;
+    let apple = {x:5,y:5};
+    let frameAcc = 0;
+    let lastTime = 0;
+    let playing = false;
+    let gameOver = false;
+    let score = 0;
+    let best = parseInt(localStorage.getItem('snake_best')||'0',10);
+    bestEl.textContent = best;
+    scoreEl.textContent = 0;
+
+    // Responsive canvas sizing: fit square to canvas client width
+    function resizeToFit(){
+      const rect = canvas.getBoundingClientRect();
+      const sz = Math.floor(rect.width); // square
+      canvas.width = sz; canvas.height = sz;
+      // choose grid to have around 18-28 px per cell on mobile
+      const targetCell = Math.max(12, Math.floor(sz / 22));
+      cellSize = targetCell;
+      cols = rows = Math.floor(sz / cellSize);
+      // make sure minimum grid
+      cols = Math.max(10, cols); rows = Math.max(10, rows);
+    }
+
+    // Random apple spawn not on snake
+    function placeApple(){
+      let tries = 0;
+      while(true){
+        tries++;
+        apple.x = Math.floor(Math.random()*cols);
+        apple.y = Math.floor(Math.random()*rows);
+        if(!snake.some(s=>s.x===apple.x&&s.y===apple.y)) break;
+        if(tries>1000) break;
+      }
+    }
+
+    function reset(fresh=true){
+      resizeToFit();
+      snake = [{x:Math.floor(cols/2),y:Math.floor(rows/2)}];
+      dir = {x:1,y:0}; nextDir = null;
+      score = 0; scoreEl.textContent = score;
+      speed = 8; gameOver=false; playing=false;
+      placeApple(); draw();
+      overlay.style.display = 'flex';
+      overlayTitle.textContent = 'Нажмите "Старт"';
+      overlayBody.textContent = 'Свайп по полю или используйте кнопки.';
+      resumeBtn.style.display = 'none';
+    }
+
+    function start(){
+      if(gameOver) reset();
+      playing = true; overlay.style.display='none'; lastTime = performance.now(); frameAcc = 0;
+      requestAnimationFrame(loop);
+    }
+
+    function pause(){
+      if(!playing) return; playing=false; overlay.style.display='flex'; overlayTitle.textContent='Пауза'; overlayBody.textContent='Нажмите Продолжить'; resumeBtn.style.display = 'inline-block';
+    }
+
+    function gameOverNow(){
+      playing=false; gameOver=true; overlay.style.display='flex'; overlayTitle.textContent='Игра окончена'; overlayBody.textContent = `Ваш счёт: ${score}`;
+      resumeBtn.style.display = 'none';
+      if(score>best){best=score; localStorage.setItem('snake_best',String(best)); bestEl.textContent = best; overlayBody.textContent += ' — новый рекорд!';}
+    }
+
+    function step(){
+      // apply buffered direction
+      if(nextDir){
+        // prevent reversing
+        if(!(nextDir.x===-dir.x && nextDir.y===-dir.y)) dir = nextDir;
+        nextDir = null;
+      }
+      const head = {x:snake[0].x+dir.x, y:snake[0].y+dir.y};
+      // wrap-around behavior: comment out for walls
+      // head.x = (head.x+cols)%cols; head.y = (head.y+rows)%rows;
+
+      // Walls kill
+      if(head.x<0||head.x>=cols||head.y<0||head.y>=rows){gameOverNow();return}
+      // Self-collision
+      if(snake.some(s=>s.x===head.x&&s.y===head.y)){gameOverNow();return}
+
+      snake.unshift(head);
+      // Eat apple?
+      if(head.x===apple.x && head.y===apple.y){
+        score += 1; scoreEl.textContent = score;
+        // slight speed increase every few apples
+        if(score%3===0) speed = Math.min(20, speed+1);
+        placeApple();
+      } else {
+        snake.pop();
+      }
+    }
+
+    function draw(){
+      const w = canvas.width, h = canvas.height;
+      ctx.clearRect(0,0,w,h);
+      // background
+      ctx.fillStyle = '#041223'; ctx.fillRect(0,0,w,h);
+
+      // grid (subtle)
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(255,255,255,0.02)';
+      for(let i=0;i<=cols;i++){
+        const x = i * cellSize + 0.5*(w - cols*cellSize);
+        ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
+      }
+      for(let i=0;i<=rows;i++){
+        const y=i*cellSize + 0.5*(h - rows*cellSize);
+        ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
+      }
+
+      // offset so grid is centered
+      const offsetX = Math.floor((w - cols*cellSize)/2);
+      const offsetY = Math.floor((h - rows*cellSize)/2);
+
+      // draw apple
+      const ax = offsetX + apple.x*cellSize, ay = offsetY + apple.y*cellSize;
+      ctx.fillStyle = 'red';
+      const pad = Math.max(2, cellSize*0.12);
+      ctx.fillRect(ax+pad, ay+pad, cellSize-2*pad, cellSize-2*pad);
+
+      // draw snake
+      for(let i=snake.length-1;i>=0;i--){
+        const s = snake[i];
+        const x = offsetX + s.x*cellSize, y = offsetY + s.y*cellSize;
+        if(i===0){
+          // head with gradient
+          ctx.fillStyle = '#42f58a';
+          ctx.fillRect(x+1,y+1,cellSize-2,cellSize-2);
+          // eyes
+          ctx.fillStyle = '#052018';
+          const eyeSize = Math.max(1, Math.floor(cellSize*0.14));
+          const eyeOffset = Math.floor(cellSize*0.18);
+          if(dir.x===1){ctx.fillRect(x+cellSize-eyeOffset-eyeSize,y+eyeOffset,eyeSize,eyeSize);ctx.fillRect(x+cellSize-eyeOffset-eyeSize,y+cellSize-eyeOffset-eyeSize,eyeSize,eyeSize)}
+          else if(dir.x===-1){ctx.fillRect(x+eyeOffset,y+eyeOffset,eyeSize,eyeSize);ctx.fillRect(x+eyeOffset,y+cellSize-eyeOffset-eyeSize,eyeSize,eyeSize)}
+          else if(dir.y===1){ctx.fillRect(x+eyeOffset,y+cellSize-eyeOffset-eyeSize,eyeSize,eyeSize);ctx.fillRect(x+cellSize-eyeOffset-eyeSize,y+cellSize-eyeOffset-eyeSize,eyeSize,eyeSize)}
+          else {ctx.fillRect(x+eyeOffset,y+eyeOffset,eyeSize,eyeSize);ctx.fillRect(x+cellSize-eyeOffset-eyeSize,y+eyeOffset,eyeSize,eyeSize)}
+        } else {
+          // body gradient
+          const g = ctx.createLinearGradient(x,y,x+cellSize,y+cellSize);
+          g.addColorStop(0,'#0bb86b'); g.addColorStop(1,'#067a46');
+          ctx.fillStyle = g;
+          ctx.fillRect(x+1,y+1,cellSize-2,cellSize-2);
+        }
+      }
+    }
+
+    function loop(now){
+      if(!playing) return;
+      const dt = (now - lastTime)/1000; lastTime = now;
+      frameAcc += dt;
+      const secsPerStep = 1 / speed;
+      while(frameAcc >= secsPerStep){ frameAcc -= secsPerStep; step(); if(gameOver) break; }
+      draw();
+      if(!gameOver) requestAnimationFrame(loop);
+    }
+
+    // controls: keyboard
+    window.addEventListener('keydown', e=>{
+      const k = e.key;
+      if(k==='ArrowUp'||k==='w') trySetDir(0,-1);
+      if(k==='ArrowDown'||k==='s') trySetDir(0,1);
+      if(k==='ArrowLeft'||k==='a') trySetDir(-1,0);
+      if(k==='ArrowRight'||k==='d') trySetDir(1,0);
+      if(k===' '){ if(playing) pause(); else start(); }
+    });
+
+    // try to set direction (buffered)
+    function trySetDir(x,y){
+      const candidate = {x,y};
+      // prevent reversing into self
+      if(candidate.x===-dir.x && candidate.y===-dir.y) return;
+      // if move hasn't happened since last input, store as nextDir
+      nextDir = candidate;
+    }
+
+    // on-screen buttons
+    document.getElementById('pad').addEventListener('pointerdown', e=>{
+      const btn = e.target.closest('.btn'); if(!btn) return;
+      const d = btn.dataset.dir;
+      if(!d) return;
+      if(d==='N') trySetDir(0,-1);
+      if(d==='S') trySetDir(0,1);
+      if(d==='E') trySetDir(1,0);
+      if(d==='W') trySetDir(-1,0);
+      // provide immediate visual feedback
+      btn.classList.add('active'); setTimeout(()=>btn.classList.remove('active'),120);
+      // start if not playing
+      if(!playing && !gameOver) start();
+    });
+
+    // swipe handling
+    (function(){
+      let touchStart = null; const minDist = 10; // px
+      canvas.addEventListener('pointerdown', e=>{ touchStart = {x:e.clientX,y:e.clientY}; canvas.setPointerCapture(e.pointerId); });
+      canvas.addEventListener('pointermove', e=>{ if(!touchStart) return; });
+      canvas.addEventListener('pointerup', e=>{
+        if(!touchStart) return; const dx = e.clientX - touchStart.x; const dy = e.clientY - touchStart.y; touchStart = null;
+        if(Math.abs(dx)<minDist && Math.abs(dy)<minDist) return; // tap
+        if(Math.abs(dx)>Math.abs(dy)) { if(dx>0) trySetDir(1,0); else trySetDir(-1,0); }
+        else { if(dy>0) trySetDir(0,1); else trySetDir(0,-1); }
+        if(!playing && !gameOver) start();
+      });
+    })();
+
+    // buttons
+    startBtn.addEventListener('click', start);
+    resumeBtn.addEventListener('click', ()=>{ start(); });
+    pauseBtn.addEventListener('click', pause);
+    restartBtn.addEventListener('click', ()=>{ reset(); });
+
+    // resize observer
+    const ro = new ResizeObserver(()=>{ resizeToFit(); draw(); }); ro.observe(canvas);
+
+    // init
+    reset();
+
+    // finally, tap overlay to hide and start
+    overlay.addEventListener('click', e=>{
+      if(e.target===overlay) return; // don't close when clicking container background
+    });
+
+  })();
+  </script>
+</body>
+</html>
